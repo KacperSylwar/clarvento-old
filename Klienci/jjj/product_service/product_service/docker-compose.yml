@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  web:
+    build: .
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+    ports:
+      - "9853:8000"  # Port 8000 w kontenerze mapowany na 9853 na hoście
+    depends_on:
+      - db
+      - rabbitmq
+    # Jeśli chcesz nadpisać komendę startową z Dockerfile, odkomentuj poniższą linię:
+    # command: gunicorn product_service.wsgi:application --bind 0.0.0.0:8000
+
+  db:
+    image: postgres:13
+    env_file:
+      - .env
+    environment:
+      - POSTGRES_DB=${DATABASE_NAME}
+      - POSTGRES_USER=${DATABASE_USER}
+      - POSTGRES_PASSWORD=${DATABASE_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"    # Port dla aplikacji korzystającej z RabbitMQ
+      - "15672:15672"  # Port dla panelu zarządzania RabbitMQ
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+
+  celery_worker:
+    build: .
+    env_file:
+      - .env
+    command: celery -A product_service worker --loglevel=info
+    depends_on:
+      - rabbitmq
+      - db
+    volumes:
+      - .:/app
+
+volumes:
+  postgres_data:
