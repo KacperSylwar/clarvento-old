@@ -1,0 +1,155 @@
+services:
+
+  # ────────────────────────────────────────────────
+  # DATABASE
+  # ────────────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    container_name: clar_db
+    restart: unless-stopped
+    env_file: backend/.env.prod
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-clarvento}
+      POSTGRES_USER: ${POSTGRES_USER:-clarvento}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-clarvento}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ────────────────────────────────────────────────
+  # REDIS
+  # ────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: clar_redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ────────────────────────────────────────────────
+  # DJANGO BACKEND (Gunicorn + Uvicorn)
+  # Caddy proxy: accutrace.of-course.pl → port 4004
+  # ────────────────────────────────────────────────
+  backend:
+    build:
+      context: backend
+      dockerfile: Dockerfile
+    container_name: clar_backend
+    restart: unless-stopped
+    env_file: backend/.env.prod
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.prod
+    ports:
+      - "4004:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - media_data:/app/media
+      - static_data:/app/staticfiles
+    networks:
+      - internal
+      - protectionlist_forn_default
+
+  # ────────────────────────────────────────────────
+  # NEXT.JS FRONTEND
+  # Domena: v1.of-course.pl → port 4005
+  # ────────────────────────────────────────────────
+  frontend:
+    build:
+      context: frontend
+      dockerfile: Dockerfile
+      target: prod
+      args:
+        BACKEND_INTERNAL_URL: http://clar_backend:8000
+    container_name: clar_frontend
+    restart: unless-stopped
+    env_file: frontend/.env.prod
+    environment:
+      NODE_ENV: production
+      BACKEND_INTERNAL_URL: http://clar_backend:8000
+    ports:
+      - "4005:3000"
+    depends_on:
+      - backend
+    networks:
+      - internal
+      - protectionlist_forn_default
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/ > /dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ────────────────────────────────────────────────
+  # CELERY WORKER
+  # ────────────────────────────────────────────────
+  celery:
+    build:
+      context: backend
+      dockerfile: Dockerfile
+    container_name: clar_celery
+    restart: unless-stopped
+    env_file: backend/.env.prod
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.prod
+    command: ["celery", "-A", "config", "worker", "-l", "info", "--concurrency", "4"]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - media_data:/app/media
+    networks:
+      - internal
+
+  # ────────────────────────────────────────────────
+  # CELERY BEAT (scheduler)
+  # ────────────────────────────────────────────────
+  celery-beat:
+    build:
+      context: backend
+      dockerfile: Dockerfile
+    container_name: clar_celery_beat
+    restart: unless-stopped
+    env_file: backend/.env.prod
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.prod
+    command: ["celery", "-A", "config", "beat", "-l", "info", "--scheduler", "django_celery_beat.schedulers:DatabaseScheduler"]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - internal
+
+networks:
+  internal:
+    driver: bridge
+  protectionlist_forn_default:
+    external: true
+
+volumes:
+  postgres_data:
+  redis_data:
+  media_data:
+  static_data:
+  # static_data montowany w backend — Caddy może go serwować bezpośrednio
+  # jeśli chcesz: dodaj bind mount do folderu na hoście i skonfiguruj Caddy
