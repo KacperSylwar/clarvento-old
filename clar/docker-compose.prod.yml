@@ -51,8 +51,9 @@ services:
     env_file: backend/.env.prod
     environment:
       DJANGO_SETTINGS_MODULE: config.settings.prod
+    command: ["gunicorn", "config.asgi:application", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:4004", "--workers", "4", "--timeout", "30"]
     ports:
-      - "4004:8000"
+      - "4004:4004"
     depends_on:
       db:
         condition: service_healthy
@@ -75,22 +76,23 @@ services:
       dockerfile: Dockerfile
       target: prod
       args:
-        BACKEND_INTERNAL_URL: http://clar_backend:8000
+        BACKEND_INTERNAL_URL: http://clar_backend:4004
     container_name: clar_frontend
     restart: unless-stopped
     env_file: frontend/.env.prod
     environment:
       NODE_ENV: production
-      BACKEND_INTERNAL_URL: http://clar_backend:8000
+      BACKEND_INTERNAL_URL: http://clar_backend:4004
+      PORT: "4005"
     ports:
-      - "4005:3000"
+      - "4005:4005"
     depends_on:
       - backend
     networks:
       - internal
       - protectionlist_forn_default
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/ > /dev/null 2>&1 || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:4005/ > /dev/null 2>&1 || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
